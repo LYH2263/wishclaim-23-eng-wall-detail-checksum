@@ -1,4 +1,5 @@
 from app.db import connect
+from app.integrity import projection
 
 def init_db():
     c = connect()
@@ -9,6 +10,7 @@ def init_db():
     );
     CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
     """)
+    projection.ensure_schema(c)
     if c.execute("SELECT COUNT(*) c FROM wishes").fetchone()["c"] == 0:
         c.executemany(
             "INSERT INTO wishes(title,note,status,claimer,claimed_at,expires_at,data_quality) VALUES (?,?,?,?,?,?,?)",
@@ -23,4 +25,6 @@ def init_db():
         c.execute("INSERT INTO settings(key,value) VALUES ('ttl_seconds','86400')")
         c.execute("INSERT INTO settings(key,value) VALUES ('wall_title','暖粉愿望墙')")
         c.commit()
+    projection.reproject_all(c)
+    c.commit()
     c.close()

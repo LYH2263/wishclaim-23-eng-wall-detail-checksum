@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from app import seed
 from app.db import connect
 from app.engines.claim_lock import claim_allowed, lock_payload, release_if_expired
+from app.integrity.projection import reproject
 
 app = FastAPI(title="Wishclaim", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -24,6 +25,7 @@ def sweep(c):
         if rel:
             c.execute("UPDATE wishes SET status=?, claimer=?, claimed_at=?, expires_at=? WHERE id=?",
                       (rel["status"], None, None, None, r["id"]))
+            reproject(c, r["id"])
 
 @app.get("/api/health")
 def health(): return {"ok": True, "project": "wishclaim"}
@@ -49,7 +51,9 @@ def create_wish(body: WishIn):
     c = connect()
     cur = c.execute("INSERT INTO wishes(title,note,status,data_quality) VALUES (?,?,?,?)",
                     (body.title, body.note, "open", "clean"))
-    c.commit(); wid = cur.lastrowid; c.close(); return {"id": wid}
+    wid = cur.lastrowid
+    reproject(c, wid)
+    c.commit(); c.close(); return {"id": wid}
 
 class ClaimIn(BaseModel):
     claimer: str
@@ -65,6 +69,7 @@ def claim(wid: int, body: ClaimIn):
     p = lock_payload(body.claimer, now(), ttl())
     c.execute("UPDATE wishes SET status=?, claimer=?, claimed_at=?, expires_at=? WHERE id=?",
               (p["status"], p["claimer"], p["claimed_at"], p["expires_at"], wid))
+    reproject(c, wid)
     c.commit(); c.close(); return p
 
 @app.post("/api/wishes/{wid}/release")
@@ -75,6 +80,7 @@ def release(wid: int):
     if r["status"] != "claimed":
         c.close(); raise HTTPException(400, "not_claimed")
     c.execute("UPDATE wishes SET status='released', claimer=NULL, claimed_at=NULL, expires_at=NULL WHERE id=?", (wid,))
+    reproject(c, wid)
     c.commit(); c.close(); return {"ok": True, "status": "released"}
 
 @app.post("/api/wishes/{wid}/fulfill")
@@ -85,6 +91,7 @@ def fulfill(wid: int):
     if r["status"] != "claimed":
         c.close(); raise HTTPException(400, "need_claim")
     c.execute("UPDATE wishes SET status='fulfilled' WHERE id=?", (wid,))
+    reproject(c, wid)
     c.commit(); c.close(); return {"ok": True, "status": "fulfilled"}
 
 @app.get("/api/mine")
